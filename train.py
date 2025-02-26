@@ -11,7 +11,7 @@ import torch.optim as optim
 from torch.utils.data.sampler import RandomSampler
 from utils.util import *
 import apex
-from apex import amp
+# from apex import amp
 from dataset import get_df_stone, get_transforms, MMC_ClassificationDataset
 from models import Effnet_MMC, Resnest_MMC, Seresnext_MMC
 
@@ -24,6 +24,16 @@ Precautions_msg = '(주의사항) ---- \n'
 모델을 학습하는 전과정을 담은 코드
 
 #### 실행법 ####
+
+
+
+python train.py --kernel-type test_nometa --data-folder original_stone/ --enet-type tf_efficientnet_b3_ns
+
+python train.py --kernel-type test_meta --data-folder original_stone/ --enet-type tf_efficientnet_b3_ns --use-meta
+
+
+
+
 Terminal을 이용하는 경우 경로 설정 후 아래 코드를 직접 실행
 python train.py --kernel-type 5fold_b3_256_30ep --data-folder original_stone/ --enet-type tf_efficientnet_b3_ns --n-epochs 30
 
@@ -47,11 +57,10 @@ def parse_args():
     parser.add_argument('--kernel-type', type=str, required=True)
     # kernel_type : 실험 세팅에 대한 전반적인 정보가 담긴 고유 이름
 
-
-    parser.add_argument('--data-dir', type=str, default='./data/')
+    parser.add_argument('--data-dir', type=str, default='C:/Users/mani/Documents/code/medical_paper/Stone_test/data')
     # base 데이터 폴더 ('./data/')
 
-    parser.add_argument('--data-folder', type=str, required=True)
+    parser.add_argument('--data-folder', type=str, default='./original_stone/')
     # 데이터 세부 폴더 예: 'original_stone/'
     # os.path.join(data_dir, data_folder, 'train.csv')
 
@@ -88,7 +97,7 @@ def parse_args():
     parser.add_argument('--CUDA_VISIBLE_DEVICES', type=str, default='0')
     # 학습에 사용할 GPU 번호
 
-    parser.add_argument('--k-fold', type=int, default=5)
+    parser.add_argument('--k-fold', type=int, default=4)
     # data cross-validation
     # k-fold의 k 값을 명시
 
@@ -110,9 +119,9 @@ def parse_args():
     # 원본데이터에 추가로 외부 데이터를 사용할지 여부
 
     parser.add_argument('--batch-size', type=int, default=16) # 배치 사이즈
-    parser.add_argument('--num-workers', type=int, default=32) # 데이터 읽어오는 스레드 개수
+    parser.add_argument('--num-workers', type=int, default=6) # 데이터 읽어오는 스레드 개수
     parser.add_argument('--init-lr', type=float, default=3e-5) # 초기 러닝 레이트. pretrained를 쓰면 매우 작은값
-    parser.add_argument('--n-epochs', type=int, default=100) # epoch 수
+    parser.add_argument('--n-epochs', type=int, default=20) # epoch 수
 
     args, _ = parser.parse_known_args()
     return args
@@ -335,6 +344,7 @@ def main():
     # stone data 데이터셋 : dataset.get_df_stone
     ####################################################
     '''
+    # dataset.py의 get_df_stone 함수를 통해 경로를 설정하고 데이터를 가져온다.
     df_train, df_test, meta_features, n_meta_features, target_idx = get_df_stone(
         k_fold = args.k_fold,
         out_dim = args.out_dim,
@@ -344,8 +354,13 @@ def main():
         use_ext = args.use_ext
     )
 
-    # 모델 트랜스폼 가져오기
+    # dataset.py의 get_transforms 함수를 통해 데이터 전처리를 설정한다.
     transforms_train, transforms_val = get_transforms(args.image_size)
+
+    # fold별로 데이터를 나누어서 학습을 진행한다.
+    # folds = [0, 1, 2, 3]  # 4-fold
+    # train.py의 run 함수를 통해 학습을 진행한다.
+    # train 데이터만 사용 train + val o // test x
 
     folds = range(args.k_fold)
     for fold in folds:

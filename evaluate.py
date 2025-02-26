@@ -13,10 +13,19 @@ from models import Effnet_MMC, Resnest_MMC, Seresnext_MMC
 from utils.util import *
 from utils.torchsummary import summary
 
-Precautions_msg = '(주의사항) Stone dataset의 경우 사람당 4장의 이미지기때문에 batch사이즈를 4의 배수로 해야 제대로 평가 된다.'
+Precautions_msg = '(주의사항) Stone dataset의 경우 사람당 37장의 이미지기때문에 batch사이즈를 37의 배수로 해야 제대로 평가 된다.'
+
 
 
 '''
+-----------------------------------------------------------------------------------------------------------------------
+
+python evaluate.py --kernel-type test_nometa --data-folder original_stone/ --enet-type tf_efficientnet_b3_ns
+
+python evaluate.py --kernel-type test_meta --data-folder original_stone/ --enet-type tf_efficientnet_b3_ns --use-meta
+
+
+
 - evaluate.py
 
 학습한 모델을 평가하는 코드
@@ -44,25 +53,25 @@ def parse_args():
     parser.add_argument('--kernel-type', type=str, required=True)
     parser.add_argument('--data-dir', type=str, default='./data/')
     parser.add_argument('--data-folder', type=str, required=True)
-    parser.add_argument('--image-size', type=int, required=True)
+    parser.add_argument('--image-size', type=int, default='256')
     parser.add_argument('--enet-type', type=str, required=True)
-    parser.add_argument('--batch-size', type=int, default=4)
-    parser.add_argument('--num-workers', type=int, default=32)
+    parser.add_argument('--batch-size', type=int, default=37)
+    parser.add_argument('--num-workers', type=int, default=6)
     parser.add_argument('--out-dim', type=int, default=2)
     parser.add_argument('--use-amp', action='store_true')
     parser.add_argument('--use-meta', action='store_true')
     parser.add_argument('--use-ext', action='store_true')
+    parser.add_argument('--use-gradcam', action='store_true') # GRAD-CAM 근데 왜 추가? -> 논문 사후 분석
     parser.add_argument('--DEBUG', action='store_true')
     parser.add_argument('--model-dir', type=str, default='./weights')
     parser.add_argument('--log-dir', type=str, default='./logs')
     parser.add_argument('--oof-dir', type=str, default='./oofs')
-
-    parser.add_argument('--k-fold', type=int, default=5)
-    parser.add_argument('--eval', type=str, choices=['best', 'best_no_ext', 'final'], default="best")
+    parser.add_argument('--k-fold', type=int, default=4)
+    parser.add_argument('--eval', type=str, choices=['best', 'best_no_ext', 'final'], default="final")   # 조정해보자!!
     parser.add_argument('--CUDA_VISIBLE_DEVICES', type=str, default='0')
     parser.add_argument('--n-meta-dim', type=str, default='512,128')
 
-    args, _ = parser.parse_known_args()
+    args, _ = parser.parse_known_args() 
     return args
 
 
@@ -148,13 +157,13 @@ def val_epoch_stonedata(model, loader, target_idx, is_ext=None, n_test=1, get_ou
             logits /= n_test
             probs /= n_test
 
-            # 4장 의료 데이터를 묶음으로 확률계산. 평균이용
-            for b_i in range(int(data.shape[0] / 4)):
-                b_i4 = b_i*4
-                logits[0+b_i4:4+b_i4, 0] = torch.mean(logits[0+b_i4:4+b_i4, 0])
-                logits[0+b_i4:4+b_i4, 1] = torch.mean(logits[0+b_i4:4+b_i4, 1])
-                probs[0+b_i4:4+b_i4, 0] = torch.mean(probs[0+b_i4:4+b_i4, 0])
-                probs[0+b_i4:4+b_i4, 1] = torch.mean(probs[0+b_i4:4+b_i4, 1])
+            # 37장 의료 데이터를 묶음으로 확률계산. 평균이용
+            for b_i in range(int(data.shape[0] / 37)):
+                b_i4 = b_i*37
+                logits[0+b_i4:37+b_i4, 0] = torch.mean(logits[0+b_i4:37+b_i4, 0])
+                logits[0+b_i4:37+b_i4, 1] = torch.mean(logits[0+b_i4:37+b_i4, 1])
+                probs[0+b_i4:37+b_i4, 0] = torch.mean(probs[0+b_i4:37+b_i4, 0])
+                probs[0+b_i4:37+b_i4, 1] = torch.mean(probs[0+b_i4:37+b_i4, 1])
 
             LOGITS.append(logits.detach().cpu())
             PROBS.append(probs.detach().cpu())
@@ -186,6 +195,7 @@ def main():
     # stone data 데이터셋 : dataset.get_df_stone
     ####################################################
     '''
+    # dataset.py의 get_df_stone 함수를 통해 경로를 설정하고 데이터를 가져온다.
     df_train, df_test, meta_features, n_meta_features, target_idx = get_df_stone(
         k_fold = args.k_fold,
         out_dim = args.out_dim,
@@ -194,7 +204,8 @@ def main():
         use_meta = args.use_meta,
         use_ext = args.use_ext
     )
-
+    
+    # dataset.py의 get_transforms 함수를 통해 데이터 전처리를 설정한다.
     transforms_train, transforms_val = get_transforms(args.image_size)
 
     LOGITS = []
@@ -202,7 +213,8 @@ def main():
     TARGETS = []
     dfs = []
 
-
+    # k-fold 교차검증을 통해 모델을 평가한다.
+    # 각 fold마다 모델을 불러와서 평가한다.
     folds = range(args.k_fold)
     for fold in folds:
         print(f'Evaluate data fold{str(fold)}')
@@ -218,9 +230,12 @@ def main():
                 df_valid[df_valid['target'] != target_idx].sample(args.batch_size * 3)
             ])
 
+        # valid 데이터셋을 불러온다.
+        # MMC_ClassificationDataset은 dataset.py에 정의되어 있다.
         dataset_valid = MMC_ClassificationDataset(df_valid, 'valid', meta_features, transform=transforms_val)
         valid_loader = torch.utils.data.DataLoader(dataset_valid, batch_size=args.batch_size, num_workers=args.num_workers)
 
+        # 모델을 불러오는 설정 arg_parser 조건에 따라 모델을 불러온다.
         if args.eval == 'best':
             model_file = os.path.join(args.model_dir, f'{args.kernel_type}_best_fold{fold}.pth')
         elif args.eval == 'best_no_ext':
@@ -269,6 +284,7 @@ def main():
         TARGETS.append(this_TARGETS)
         dfs.append(df_valid)
 
+    
     dfs = pd.concat(dfs).reset_index(drop=True)
     dfs['pred'] = np.concatenate(PROBS).squeeze()[:, target_idx]
 
@@ -301,10 +317,10 @@ def main():
     with open(os.path.join(args.log_dir, f'log_{args.kernel_type}.txt'), 'a') as appender:
         appender.write(content + '\n')
 
-    np.save(os.path.join(args.oof_dir, f'{args.kernel_type}_{args.eval}_oof.npy'), dfs['pred'].values)
+    np.save(os.path.join(args.oof_dir, f'4_{args.kernel_type}_{args.eval}_oof.npy'), dfs['pred'].values)
 
     # 결과 csv 저장
-    dfs[['filepath', 'patient_id', 'target', 'pred']].to_csv(os.path.join(args.oof_dir, f'{args.kernel_type}_{args.eval}_oof.csv'), index=True)
+    dfs[['filepath', 'patient_id', 'target', 'pred']].to_csv(os.path.join(args.oof_dir, f'4_{args.kernel_type}_{args.eval}_oof.csv'), index=True)
 
 
 if __name__ == '__main__':

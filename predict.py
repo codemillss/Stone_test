@@ -11,6 +11,20 @@ from sklearn.metrics import roc_auc_score
 Precautions_msg = '(주의사항) Stone dataset의 경우 사람당 4장의 이미지기때문에 batch사이즈를 4의 배수로 해야 제대로 평가 된다.'
 
 '''
+20 epoch model
+
+python predict.py --kernel-type test01 --data-folder original_stone/ --enet-type tf_efficientnet_b3_ns 
+python predict.py --kernel-type test02 --data-folder original_stone/ --enet-type tf_efficientnet_b3_ns --use-meta
+
+
+30 epoch moel
+
+python predict.py --kernel-type test03 --data-folder original_stone/ --enet-type tf_efficientnet_b3_ns 
+python predict.py --kernel-type test04 --data-folder original_stone/ --enet-type tf_efficientnet_b3_ns --use-meta
+
+
+
+
 - predict.py
 
 학습한 모델을 이용해서, Test셋을 예측하는 코드
@@ -32,26 +46,27 @@ python predict.py --kernel-type 5fold_b3_256_30ep_ext --data-folder original_sto
 edited by MMCLab, 허종욱, 2020
 '''
 
+# arg_parser를 통해 입력받은 인자값을 args로 받아옴
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--kernel-type', type=str, required=True)
     parser.add_argument('--data-dir', type=str, default='./data/')
     parser.add_argument('--data-folder', type=str, required=True)
-    parser.add_argument('--image-size', type=int, required=True)
+    parser.add_argument('--image-size', type=int, default=256)
     parser.add_argument('--enet-type', type=str, required=True)
-    parser.add_argument('--batch-size', type=int, default=8)
-    parser.add_argument('--num-workers', type=int, default=32)
+    parser.add_argument('--batch-size', type=int, default=37)
+    parser.add_argument('--num-workers', type=int, default=6)
     parser.add_argument('--out-dim', type=int, default=2)
     parser.add_argument('--use-amp', action='store_true')
     parser.add_argument('--use-ext', action='store_true')
-    parser.add_argument('--k-fold', type=int, default=5)
+    parser.add_argument('--k-fold', type=int, default=4)
 
     parser.add_argument('--use-meta', action='store_true')
     parser.add_argument('--DEBUG', action='store_true')
     parser.add_argument('--model-dir', type=str, default='./weights')
     parser.add_argument('--log-dir', type=str, default='./logs')
     parser.add_argument('--sub-dir', type=str, default='./subs')
-    parser.add_argument('--eval', type=str, choices=['best', 'best_no_ext', 'final'], default="best")
+    parser.add_argument('--eval', type=str, choices=['best', 'best_no_ext', 'final'], default="final")
     parser.add_argument('--n-test', type=int, default=8)
     parser.add_argument('--CUDA_VISIBLE_DEVICES', type=str, default='0')
     parser.add_argument('--n-meta-dim', type=str, default='512,128')
@@ -67,6 +82,8 @@ def main():
     # stone data 데이터셋 : dataset.get_df_stone
     ####################################################
     '''
+    # dataset.py의 get_df_stone 함수를 이용하여 데이터셋을 불러온다.
+    # test
     df_train, df_test, meta_features, n_meta_features, target_idx = get_df_stone(
         k_fold = args.k_fold,
         out_dim = args.out_dim,
@@ -140,14 +157,14 @@ def main():
 
                 '''
                 ####################################################
-                # 4장 의료 데이터를 묶음으로 확률계산. 평균이용
+                # 37장 의료 데이터를 묶음으로 확률계산. 평균이용
                 # 타 프로젝트 진행시 삭제해야함
                 ####################################################
                 '''
-                for b_i in range(int(data.shape[0] / 4)):
-                    b_i4 = b_i * 4
-                    probs[0 + b_i4:4 + b_i4, 0] = torch.mean(probs[0 + b_i4:4 + b_i4, 0])
-                    probs[0 + b_i4:4 + b_i4, 1] = torch.mean(probs[0 + b_i4:4 + b_i4, 1])
+                for b_i in range(int(data.shape[0] / 37)):
+                    b_i4 = b_i * 37
+                    probs[0 + b_i4:37 + b_i4, 0] = torch.mean(probs[0 + b_i4:37 + b_i4, 0])
+                    probs[0 + b_i4:37 + b_i4, 1] = torch.mean(probs[0 + b_i4:37 + b_i4, 1])
                 '''
                 #################################################### 
                 ####################################################            
@@ -163,7 +180,7 @@ def main():
         acc = (PROBS.argmax(1) == TARGETS).mean() * 100.
         auc = roc_auc_score((TARGETS == target_idx).astype(float), PROBS[:, target_idx])
 
-        df_test[['image_name', 'target']].to_csv(os.path.join(args.sub_dir, f'sub_{args.kernel_type}_{args.eval}_{fold}_{acc:.2f}_{auc:.4f}.csv'), index=False)
+        df_test[['image_name', 'target']].to_csv(os.path.join(args.sub_dir, f'3_sub_{args.kernel_type}_{args.eval}_{fold}_{acc:.2f}_{auc:.4f}.csv'), index=False)
 
 
 if __name__ == '__main__':

@@ -54,7 +54,8 @@ def get_df_stone(k_fold, data_dir, data_folder, out_dim = 1, use_meta = False, u
     ####################################################
     '''
     # 교차 검증을 위해 이미지 리스트들에 분리된 번호를 매김
-    patients = len(df_train['patient_id'].unique())
+    patients_list = df_train['patient_id'].unique()
+    patients = len(patients_list)
     print(f'Original dataset의 사람 인원수 : {patients}')
 
     # 데이터 인덱스 : fold 번호. (fold)번 분할뭉치로 간다
@@ -63,7 +64,7 @@ def get_df_stone(k_fold, data_dir, data_folder, out_dim = 1, use_meta = False, u
 
     # 환자id : 분할 번호
     # 분할 방식을 나름대로 구현할 수 있다.
-    patients2fold = {i: i % k_fold for i in range(patients)}
+    patients2fold = {patient_id: idx % k_fold for idx, patient_id in enumerate(patients_list)}
     df_train['fold'] = df_train['patient_id'].map(patients2fold)
 
 
@@ -112,6 +113,8 @@ def get_df_stone(k_fold, data_dir, data_folder, out_dim = 1, use_meta = False, u
     메타 데이터를 사용하는 경우 (나이, 성별 등)
     ####################################################
     '''
+    
+    # 메타 데이터를 사용할 경우 별도의 함수를 호출
     if use_meta:
         df_train, df_test, meta_features, n_meta_features = get_meta_data_stoneproject(df_train, df_test)
     else:
@@ -139,59 +142,71 @@ def get_df_stone(k_fold, data_dir, data_folder, out_dim = 1, use_meta = False, u
     return df_train, df_test, meta_features, n_meta_features, target_idx
 
 
+# 만약 메타 데이터를 사용할 경우 
+# get_df_stone 함수에서 호출됨!!!!!!!!!!!!!!!!!!!!!!!!
 def get_meta_data_stoneproject(df_train, df_test):
     '''
     ####################################################
     메타 데이터를 사용할 경우 세팅 함수
-    (이미지를 표현하는 정보: 성별, 나이, 사람당 사진수, 이미지 크기 등)
+    (이미지를 표현하는 정보: Surface area (um²), Concentration (pg/um³)),
+    Surface_Area_Squared, Concentration_Squared, SA_Conc_Product)
+
+    Parameters:
+        df_train: DataFrame
+            학습 데이터
+        df_test: DataFrame
+            테스트 데이터
+    
+    Returns:
+        df_train: DataFrame
+            표준화된 학습 데이터
+        df_test: DataFrame
+            표준화된 테스트 데이터
+        meta_features: list
+            메타데이터 열 이름 리스트
+        n_meta_features: int
+            메타데이터 열의 개수
     ####################################################
     '''
+    # 필요한 메타데이터 칼럼
+    meta_columns = [
+        'Surface area (um²)', 
+        'Concentration (pg/um³)', 
+        'Surface_Area_Squared', 
+        'Concentration_Squared', 
+        'SA_Conc_Product'
+    ]
 
-    # One-hot encoding of targeted feature
-    concat = pd.concat([df_train['targeted_feature'], df_test['targeted_feature']], ignore_index=True)
-    dummies = pd.get_dummies(concat, dummy_na=True, dtype=np.uint8, prefix='site')
-    df_train = pd.concat([df_train, dummies.iloc[:df_train.shape[0]]], axis=1)
-    df_test = pd.concat([df_test, dummies.iloc[df_train.shape[0]:].reset_index(drop=True)], axis=1)
+    # Concentration 칼럼 제외한 나머지 칼럼에 로그 변환 적용
+    log_columns = [col for col in meta_columns if col != 'Concentration (pg/um³)']
+    
+    # 로그 변환 함수
+    def log_transform(df, columns):
+        df[columns] = np.log1p(df[columns])  # log1p는 log(x+1)을 계산
+        return df
 
-    # Sex features - 1과 0으로 변환
-    df_train['sex'] = df_train['sex'].map({'male': 1, 'female': 0})
-    df_test['sex'] = df_test['sex'].map({'male': 1, 'female': 0})
-    df_train['sex'] = df_train['sex'].fillna(-1)
-    df_test['sex'] = df_test['sex'].fillna(-1)
+    # 로그 변환 적용
+    df_train = log_transform(df_train, log_columns)
+    df_test = log_transform(df_test, log_columns)
 
-    # Age features - [0,1] 사이의 값으로 변환
-    df_train['age'] /= 90
-    df_test['age'] /= 90
-    df_train['age'] = df_train['age'].fillna(0)
-    df_test['age'] = df_test['age'].fillna(0)
-    df_train['patient_id'] = df_train['patient_id'].fillna(0)
+    # Z-norm을 위한 평균과 표준편차 계산
+    means = df_train[meta_columns].mean()
+    stds = df_train[meta_columns].std()
 
-    # n_image per user
-    df_train['n_images'] = df_train.patient_id.map(df_train.groupby(['patient_id']).image_name.count())
-    df_test['n_images'] = df_test.patient_id.map(df_test.groupby(['patient_id']).image_name.count())
-    df_train.loc[df_train['patient_id'] == -1, 'n_images'] = 1
-    df_train['n_images'] = np.log1p(df_train['n_images'].values)
-    df_test['n_images'] = np.log1p(df_test['n_images'].values)
+    # Z-norm 함수 정의
+    def standardize(df, columns, means, stds):
+        df[columns] = (df[columns] - means) / stds
+        return df
 
-    # image size
-    train_images = df_train['filepath'].values
-    train_sizes = np.zeros(train_images.shape[0])
-    for i, img_path in enumerate(tqdm(train_images)):
-        train_sizes[i] = os.path.getsize(img_path)
-    df_train['image_size'] = np.log(train_sizes)
-    test_images = df_test['filepath'].values
-    test_sizes = np.zeros(test_images.shape[0])
-    for i, img_path in enumerate(tqdm(test_images)):
-        test_sizes[i] = os.path.getsize(img_path)
-    df_test['image_size'] = np.log(test_sizes)
+    # 표준화 적용
+    df_train = standardize(df_train, meta_columns, means, stds)
+    df_test = standardize(df_test, meta_columns, means, stds)
 
-    # df_train.columns에서 모든 정보를 가져옴
-    meta_features = ['sex', 'age', 'n_images', 'image_size'] + [col for col in df_train.columns if col.startswith('site_')]
+    # 메타데이터 열 목록 생성
+    meta_features = meta_columns
     n_meta_features = len(meta_features)
 
     return df_train, df_test, meta_features, n_meta_features
-
-
 
 
 class MMC_ClassificationDataset(Dataset):
@@ -213,7 +228,7 @@ class MMC_ClassificationDataset(Dataset):
     def __init__(self, csv, mode, meta_features, transform=None):
         self.csv = csv.reset_index(drop=True)
         self.mode = mode # train / valid
-        self.use_meta = meta_features is not None
+        self.use_meta = meta_features # is not None
         self.meta_features = meta_features
         self.transform = transform
 
@@ -236,7 +251,8 @@ class MMC_ClassificationDataset(Dataset):
 
         # 메타 데이터를 쓰는 경우엔 image와 함께 텐서 생성
         if self.use_meta:
-            data = (torch.tensor(image).float(), torch.tensor(self.csv.iloc[index][self.meta_features]).float())
+            data = (torch.tensor(image).float(), torch.tensor(self.csv.iloc[index][self.meta_features].values.astype(float)).float())
+
         else:
             data = torch.tensor(image).float()
 
@@ -264,20 +280,33 @@ def get_transforms(image_size):
     TODO: Cutmix vs Mixup vs Gridmask vs Cutout
     https://www.kaggle.com/saife245/cutmix-vs-mixup-vs-gridmask-vs-cutout
 
+    모델 개선 보다는 데이터를 핸들링 하는 것이 의미 있어보임
+    meta 데이터를 사용하는 경우 feature engineering을 통한 성능 개선이 가능했음.
+    image 데이터만을 이용하는 경우 lob bound 성능을 상회하지 못하는 성능
+    -> data augmentation을 통한 성능 개선이 필요함
+    -> 어떻게 해야할까?
+    -? color를 건들여서 성능 개선 시키는 것은 무의미 함
+    mix up,
+
+    
+
     '''
     transforms_train = albumentations.Compose([
         albumentations.Transpose(p=0.5),
         albumentations.VerticalFlip(p=0.5),
         albumentations.HorizontalFlip(p=0.5),
-        albumentations.RandomBrightness(limit=0.2, p=0.75),
-        albumentations.RandomContrast(limit=0.2, p=0.75),
+        # albumentations.RandomBrightness(limit=0.2, p=0.75),
+        # albumentations.RandomContrast(limit=0.2, p=0.75),
+        albumentations.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.0, p=0.75),
+        albumentations.RandomBrightnessContrast(brightness_limit=0.0, contrast_limit=0.2, p=0.75),
+        
 
         # one of 의 경우 하나를 랜덤하게 뽑아서 쓰게 해줌
         albumentations.OneOf([
             albumentations.MotionBlur(blur_limit=5),
             albumentations.MedianBlur(blur_limit=5),
             albumentations.GaussianBlur(blur_limit=5),
-            albumentations.GaussNoise(var_limit=(5.0, 30.0)),
+            albumentations.GaussNoise(std_range=(0.05, 0.3)),
         ], p=0.7),
 
         albumentations.OneOf([
@@ -290,7 +319,8 @@ def get_transforms(image_size):
         albumentations.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=10, p=0.5),
         albumentations.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=15, border_mode=0, p=0.85),
         albumentations.Resize(image_size, image_size),
-        albumentations.Cutout(max_h_size=int(image_size * 0.375), max_w_size=int(image_size * 0.375), num_holes=1, p=0.7),
+        # albumentations.Cutout(max_h_size=int(image_size * 0.375), max_w_size=int(image_size * 0.375), num_holes=1, p=0.7),
+        albumentations.CoarseDropout(num_holes_range=(1,1), hole_height_range=(0.01, 0.375), hole_width_range=(0.01 , 0.375), p=0.7),
         albumentations.Normalize()
     ])
 
